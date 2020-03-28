@@ -24,14 +24,14 @@ def sigmoid(x):
 
 
 def naiveSoftmaxLossAndGradient(
-    centerWordVec,
-    outsideWordIdx,
-    outsideVectors,
-    dataset
+        centerWordVec,
+        outsideWordIdx,
+        outsideVectors,
+        dataset
 ):
     """ Naive Softmax loss & gradient function for word2vec models
 
-    Implement the naive softmax loss and gradients between a center word's 
+    Implement the naive softmax loss and gradients between a center word's
     embedding and an outside word's embedding. This will be the building block
     for our word2vec models.
 
@@ -51,23 +51,19 @@ def naiveSoftmaxLossAndGradient(
     gradOutsideVecs -- the gradient with respect to all the outside word vectors
                     (dJ / dU)
     """
-
-    ### YOUR CODE HERE
-
-    ### Please use the provided softmax function (imported earlier in this file)
-    ### This numerically stable implementation helps you avoid issues pertaining
-    ### to integer overflow.
-
     Vc = centerWordVec
+    U = outsideVectors
 
-    # A vectorized dot product between all Uw and Vc
-    all_dot_prods = (Vc.T*outsideVectors).sum(axis=1)
-    softmax_vector = softmax(all_dot_prods)
+    # Much better than: U.dot(Vc.reshape(-1, 1)).sum(axis=1)
+    all_dot_prods = np.dot(U, Vc)
+    y_hat = softmax(all_dot_prods)
+    loss = -np.log(y_hat[outsideWordIdx])
 
-    prob = softmax_vector[outsideWordIdx] / softmax_vector.sum()
-    loss = -prob
-    gradCenterVec, gradOutsideVecs = 0, 0
-    ### END YOUR CODE
+    y = np.zeros(shape=y_hat.shape)
+    y[outsideWordIdx] = 1
+    # Better than: gradCenterVec = (y_hat - y).reshape(1, -1).dot(U).reshape(-1)
+    gradCenterVec = np.dot(U.T, (y_hat - y))
+    gradOutsideVecs = np.outer(y_hat - y, Vc)
 
     return loss, gradCenterVec, gradOutsideVecs
 
@@ -110,12 +106,33 @@ def negSamplingLossAndGradient(
     negSampleWordIndices = getNegativeSamples(outsideWordIdx, dataset, K)
     indices = [outsideWordIdx] + negSampleWordIndices
 
-    ### YOUR CODE HERE
+    # A sign vector for multiplying the inside of the sigmoid function
+    #   by -1 for all u_k (but not u_o)
+    sign_vec = -np.ones(len(indices))
+    sign_vec[0] = 1
 
-    ### Please use your implementation of sigmoid in here.
+    # All u_k together; if u_k is repeated, it appears repeated here as well;
+    #     includes u_o as well
+    all_u = outsideVectors[indices]
 
+    # Various helper variables
+    Vc = centerWordVec
+    sigmoids = sigmoid(sign_vec*(all_u.dot(Vc.T)))
+    loss = -np.log(sigmoids).sum()
 
-    ### END YOUR CODE
+    gradCenterVec = 0.0
+    gradOutsideVecs = np.zeros(outsideVectors.shape)
+
+    for u_idx, sign, sigmoid_value, Uk in zip(indices, sign_vec,
+                                              sigmoids, all_u):
+        """
+        # The sign is the opposite of what we want for the sigmoid,
+            ie, negative for Uoutside and positive otherwise
+
+        OBS: Yes, it is possible to do it without a for loop, but I didn't
+        """
+        gradCenterVec += -sign * Uk * (1-sigmoid_value)
+        gradOutsideVecs[u_idx] += -sign * Vc * (1-sigmoid_value)
 
     return loss, gradCenterVec, gradOutsideVecs
 
@@ -155,9 +172,17 @@ def skipgram(currentCenterWord, windowSize, outsideWords, word2Ind,
     gradCenterVecs = np.zeros(centerWordVectors.shape)
     gradOutsideVectors = np.zeros(outsideVectors.shape)
 
-    ### YOUR CODE HERE
+    center_idx = word2Ind[currentCenterWord]
+    Vc = centerWordVectors[center_idx]
+    U = outsideVectors
 
-    ### END YOUR CODE
+    for word in outsideWords:
+        outsideWordIdx = word2Ind[word]
+        local_J, dJ_Vc, dJ_U = word2vecLossAndGradient(Vc, outsideWordIdx,
+                                                       U, dataset)
+        loss += local_J
+        gradCenterVecs[center_idx] += dJ_Vc
+        gradOutsideVectors += dJ_U
 
     return loss, gradCenterVecs, gradOutsideVectors
 
@@ -165,7 +190,7 @@ def skipgram(currentCenterWord, windowSize, outsideWords, word2Ind,
 # Testing functions below. DO NOT MODIFY!   #
 #############################################
 
-def word2vec_sgd_wrapper(word2vecModel, word2Ind, wordVectors, dataset, 
+def word2vec_sgd_wrapper(word2vecModel, word2Ind, wordVectors, dataset,
                          windowSize,
                          word2vecLossAndGradient=naiveSoftmaxLossAndGradient):
     batchsize = 50
